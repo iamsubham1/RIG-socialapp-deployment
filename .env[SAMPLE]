@@ -1,4 +1,0 @@
-PORT = 3000
-CLIENT_URL = '*'
-// Please enter ur mongo db uri below
-MONGODB_URI = ""
