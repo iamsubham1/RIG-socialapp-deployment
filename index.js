@@ -412,7 +412,7 @@ const startServer = async () => {
 
   app.use("/temp", express.static(path.join(__dirname, "temp")));
 
-  // Upload endpoint to save videos
+
 
 
   // Helper functions to get additional information
