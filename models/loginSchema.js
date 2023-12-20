@@ -14,6 +14,7 @@ const loginSchema = new mongoose.Schema({
     following: { type: Array, default: [] },
     socialId: { type: String, default: "" },
     live: { type: Boolean, default: false },
+
 });
 
 const Login = mongoose.model("Login", loginSchema);

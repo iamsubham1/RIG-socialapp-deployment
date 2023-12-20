@@ -1,6 +1,7 @@
 const mongoose = require('mongoose');
 
 const videoSchema = new mongoose.Schema({
+    userId: { type: mongoose.Schema.Types.ObjectId, ref: 'Login' },
     author: String,
     description: String,
     videoUrl: String,

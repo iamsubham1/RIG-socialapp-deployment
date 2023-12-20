@@ -17,27 +17,32 @@ const port = process.env.PORT;
 const app = express();
 const server = http.createServer(app);
 const io = new Server(server);
-const mongoURI = process.env.MONGODB_URI;
 const cloudinary = require('cloudinary').v2;
+
 //importing schemas
 const Video = require('./models/videoSchema');
 const Login = require('./models/loginSchema');
 const Message = require('./models/messageSchema');
 
-const upload = multer({ dest: 'temp' });
+//acquire environment variables
+require('dotenv').config({ path: '.env' });
+const mongoURI = process.env.MONGODB_URI;
+const cloudname = process.env.cloud_name;
+const apikey = process.env.api_key;
+const apisecret = process.env.api_secret;
+
+
 process.on('unhandledRejection', (reason, promise) => {
   console.error('Unhandled Rejection at:', promise, 'reason:', reason);
-  // Application-specific logging, throwing an error, or other logic here
+
 });
-
-
-require('dotenv').config({ path: '.env' });
+const upload = multer({ dest: 'temp' });
 
 // Cloudinary configuration
 cloudinary.config({
-  cloud_name: 'dmb0ooxo5',
-  api_key: '961269617798218',
-  api_secret: 'Xce-92wwLFRdAonPK59BCWcAooU',
+  cloud_name: cloudname,
+  api_key: apikey,
+  api_secret: apisecret,
 });
 
 const startServer = async () => {
@@ -67,6 +72,133 @@ const startServer = async () => {
   })
 
   //tested
+
+  app.post("/signup", async (req, res) => {
+    try {
+      const { name, userId, password } = req.body;
+
+      // Check if the user already exists
+      const existingUser = await Login.findOne({ userId });
+
+      if (existingUser) {
+        res.status(409).json({ message: "User already exists" });
+      } else {
+        // Create a new user
+        const fancyId = userId.split("@")[0];
+        const newUser = new Login({ name, userId, password, fancyId });
+
+        // Save the new user to the database
+        await newUser.save();
+
+        const userData = await Login.findOne({ userId });
+
+        res
+          .status(200)
+          .json({ message: "User created successfully", _id: userData["_id"] });
+      }
+    } catch (error) {
+      res.status(500).json({ message: "Error creating user" });
+    }
+  });
+
+  app.post("/login", async (req, res) => {
+    try {
+      const { userId, password } = req.body;
+
+      // Find a document where userId and password match
+      const login = await Login.findOne({ userId, password });
+
+      if (login) {
+        res.status(200).send("login succesfully")
+      } else {
+
+        res.status(404).json({ message: "Login not found" });
+      }
+    } catch (error) {
+      res.status(500).json({ message: "Error retrieving login" });
+    }
+  });
+  app.post('/upload', upload.single('video'), async (req, res) => {
+
+    try {
+      const { description, author } = req.body;
+      const inputUrl = req.file.path;
+
+      // Upload to Cloudinary
+      cloudinary.uploader.upload(inputUrl, { resource_type: 'video' }, async (error, result) => {
+        if (error) {
+          console.error(`Error uploading to Cloudinary: ${error}`);
+          res.status(500).send('Error uploading to Cloudinary');
+          return;
+        }
+
+        // Create a new video instance
+        const newVideo = new Video({
+
+          description,
+          author,
+          videoUrl: result.secure_url,
+        });
+
+        // Save the video to the database
+        const savedVideo = await newVideo.save();
+
+        // Update the corresponding user's posts array in the Login schema
+        await Login.updateOne(
+          // Assuming userId is the correct field in your Login schema
+          { $push: { posts: savedVideo._id } }
+        );
+
+        res.status(201).json({ message: 'Video uploaded successfully' });
+
+        // Delete temporary file
+        fs.unlink(inputUrl, (err) => {
+          if (err) {
+            console.error(`Error deleting file: ${err}`);
+          }
+          console.log('Temporary file deleted successfully');
+        });
+      });
+    } catch (error) {
+      console.error(error);
+      res.status(500).json({ message: 'Error uploading video' });
+    }
+  });
+
+  app.post("/reels", async (req, res) => {
+    try {
+      const { userId } = req.body;
+      // Fetch all videos from the database
+      const videos = await Video.find().sort({ createdAt: -1 });
+
+      // Prepare the response with additional information
+      const reelsWithInfo = await Promise.all(
+        videos.map(async (video) => {
+          const authorName = await getAuthorName(video.author);
+          const profilePic = await getProfilePic(video.author);
+          const likedStatus = await isVideoLikedByUser(video._id, userId);
+          const likesCount = video.likes.length;
+          const commentsCount = video.comments.length;
+          const savedStatus = await isVideoSavedByUser(video._id, userId);
+          const savedByCount = video.saved.length;
+
+          return {
+            ...video.toObject(),
+            authorName,
+            profilePic,
+            likedStatus,
+            likesCount,
+            commentsCount,
+            savedStatus,
+            savedByCount,
+          };
+        })
+      );
+      res.status(200).json(reelsWithInfo);
+    } catch (error) {
+      res.status(500).json({ error: "Internal server error" });
+    }
+  });
   app.post("/message", async (req, res) => {
     try {
       const { from, to, message } = req.body;
@@ -220,22 +352,6 @@ const startServer = async () => {
     }
   });
 
-  app.post("/login", async (req, res) => {
-    try {
-      const { userId, password } = req.body;
-
-      // Find a document where userId and password match
-      const login = await Login.findOne({ userId, password });
-
-      if (login) {
-        res.status(200).json(login);
-      } else {
-        res.status(404).json({ message: "Login not found" });
-      }
-    } catch (error) {
-      res.status(500).json({ message: "Error retrieving login" });
-    }
-  });
 
   app.post("/getTokens", async (req, res) => {
     try {
@@ -293,117 +409,11 @@ const startServer = async () => {
     }
   });
 
-  app.post("/signup", async (req, res) => {
-    try {
-      const { name, userId, password } = req.body;
-
-      // Check if the user already exists
-      const existingUser = await Login.findOne({ userId });
-
-      if (existingUser) {
-        res.status(409).json({ message: "User already exists" });
-      } else {
-        // Create a new user
-        const fancyId = userId.split("@")[0];
-        const newUser = new Login({ name, userId, password, fancyId });
-
-        // Save the new user to the database
-        await newUser.save();
-
-        const userData = await Login.findOne({ userId });
-
-        res
-          .status(200)
-          .json({ message: "User created successfully", _id: userData["_id"] });
-      }
-    } catch (error) {
-      res.status(500).json({ message: "Error creating user" });
-    }
-  });
 
   app.use("/temp", express.static(path.join(__dirname, "temp")));
 
   // Upload endpoint to save videos
-  app.post('/upload', upload.single('video'), async (req, res) => {
-    try {
-      const { userId, description, author } = req.body;
-      const inputUrl = req.file.path;
 
-      // Upload to Cloudinary
-      cloudinary.uploader.upload(inputUrl, { resource_type: 'video' }, async (error, result) => {
-        if (error) {
-          console.error(`Error uploading to Cloudinary: ${error}`);
-          res.status(500).send('Error uploading to Cloudinary');
-          return;
-        }
-
-        // Create a new video instance
-        const newVideo = new Video({
-          userId, // Assuming userId is the correct field in your Video schema
-          description,
-          author,
-          videoUrl: result.secure_url,
-        });
-
-        // Save the video to the database
-        const savedVideo = await newVideo.save();
-
-        // Update the corresponding user's posts array in the Login schema
-        await Login.updateOne(
-          { userId }, // Assuming userId is the correct field in your Login schema
-          { $push: { posts: savedVideo._id } }
-        );
-
-        res.status(201).json({ message: 'Video uploaded successfully' });
-
-        // Delete temporary file
-        fs.unlink(inputUrl, (err) => {
-          if (err) {
-            console.error(`Error deleting file: ${err}`);
-          }
-          console.log('Temporary file deleted successfully');
-        });
-      });
-    } catch (error) {
-      console.error(error);
-      res.status(500).json({ message: 'Error uploading video' });
-    }
-  });
-
-  app.post("/reels", async (req, res) => {
-    try {
-      const { userId } = req.body;
-      // Fetch all videos from the database
-      const videos = await Video.find().sort({ createdAt: -1 });
-
-      // Prepare the response with additional information
-      const reelsWithInfo = await Promise.all(
-        videos.map(async (video) => {
-          const authorName = await getAuthorName(video.author);
-          const profilePic = await getProfilePic(video.author);
-          const likedStatus = await isVideoLikedByUser(video._id, userId);
-          const likesCount = video.likes.length;
-          const commentsCount = video.comments.length;
-          const savedStatus = await isVideoSavedByUser(video._id, userId);
-          const savedByCount = video.saved.length;
-
-          return {
-            ...video.toObject(),
-            authorName,
-            profilePic,
-            likedStatus,
-            likesCount,
-            commentsCount,
-            savedStatus,
-            savedByCount,
-          };
-        })
-      );
-      res.status(200).json(reelsWithInfo);
-    } catch (error) {
-      res.status(500).json({ error: "Internal server error" });
-    }
-  });
 
   // Helper functions to get additional information
   async function getAuthorName(authorId) {
@@ -429,17 +439,36 @@ const startServer = async () => {
   app.post("/like", async (req, res) => {
     try {
       const { videoId, userId, likedStatus } = req.body;
-      if (likedStatus) {
-        await Video.updateOne({ _id: videoId }, { $pull: { likes: userId } });
-      } else {
-        await Video.updateOne({ _id: videoId }, { $push: { likes: userId } });
+
+      // Check if the video exists
+      const video = await Video.findById(videoId);
+      if (!video) {
+        return res.status(404).json({ message: "Video not found" });
       }
+
+      // Check if the user has already liked the video
+      const userAlreadyLiked = video.likes.includes(userId);
+
+      // Perform like/dislike action based on likedStatus
+      if (likedStatus && !userAlreadyLiked) {
+
+        video.likes.push(userId);
+      } else if (!likedStatus && userAlreadyLiked) {
+
+        video.likes = video.likes.filter(id => id !== userId);
+      }
+
+      // Save the updated video
+      await video.save();
 
       res.status(200).json({ message: "Video liked/disliked successfully" });
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Error liking/disliking video" });
     }
   });
+
+
 
   app.post("/save", async (req, res) => {
     try {
@@ -512,9 +541,40 @@ const startServer = async () => {
         { _id: videoId },
         { $push: { comments: { _id: id, author, comment, likes: [] } } }
       );
-      res.status(200).json(id);
+      res.status(200).send("commented successfully");
     } catch (error) {
       res.status(500).json({ message: "Error posting comment" });
+    }
+  });
+
+  app.post("/deletecomment", async (req, res) => {
+    try {
+      const { videoId, commentId } = req.body;
+
+      // Check if the video exists
+      const video = await Video.findById(videoId);
+      if (!video) {
+        return res.status(404).json({ message: "Video not found" });
+      }
+
+      // Find the index of the comment in the comments array
+      const commentIndex = video.comments.findIndex(comment => comment._id.toString() === commentId);
+
+      // Check if the comment exists
+      if (commentIndex === -1) {
+        return res.status(404).json({ message: "Comment not found" });
+      }
+
+      // Remove the comment from the comments array
+      video.comments.splice(commentIndex, 1);
+
+      // Save the updated video
+      await video.save();
+
+      res.status(200).json({ message: "Comment deleted successfully" });
+    } catch (error) {
+      console.error(error);
+      res.status(500).json({ message: "Error deleting comment" });
     }
   });
 
