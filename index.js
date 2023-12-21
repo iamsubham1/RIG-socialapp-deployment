@@ -21,7 +21,7 @@ const cloudinary = require('cloudinary').v2;
 
 //importing schemas
 const Video = require('./models/videoSchema');
-const Login = require('./models/loginSchema');
+const UserInfo = require('./models/userSchema');
 const Message = require('./models/messageSchema');
 
 //acquire environment variables
@@ -75,26 +75,24 @@ const startServer = async () => {
 
   app.post("/signup", async (req, res) => {
     try {
-      const { name, userId, password } = req.body;
+      const { name, email, password } = req.body;
 
       // Check if the user already exists
-      const existingUser = await Login.findOne({ userId });
+      const existingUser = await UserInfo.findOne({ email });
 
       if (existingUser) {
         res.status(409).json({ message: "User already exists" });
       } else {
         // Create a new user
-        const fancyId = userId.split("@")[0];
-        const newUser = new Login({ name, userId, password, fancyId });
+        const fancyId = email.split("@")[0];
+        const newUser = new UserInfo({ name, email, password, fancyId });
 
         // Save the new user to the database
         await newUser.save();
 
-        const userData = await Login.findOne({ userId });
+        const userData = await UserInfo.findOne({ email });
 
-        res
-          .status(200)
-          .json({ message: "User created successfully", _id: userData["_id"] });
+        res.status(200).json({ message: "User created successfully", _ID: userData["_id"] });
       }
     } catch (error) {
       res.status(500).json({ message: "Error creating user" });
@@ -103,16 +101,16 @@ const startServer = async () => {
 
   app.post("/login", async (req, res) => {
     try {
-      const { userId, password } = req.body;
+      const { email, password } = req.body;
 
-      // Find a document where userId and password match
-      const login = await Login.findOne({ userId, password });
+      // Find a document where email and password match
+      const login = await UserInfo.findOne({ email, password });
 
       if (login) {
         res.status(200).send("login succesfully")
       } else {
 
-        res.status(404).json({ message: "Login not found" });
+        res.status(404).json({ message: "UserInfo not found" });
       }
     } catch (error) {
       res.status(500).json({ message: "Error retrieving login" });
@@ -121,7 +119,7 @@ const startServer = async () => {
   app.post('/upload', upload.single('video'), async (req, res) => {
 
     try {
-      const { description, author } = req.body;
+      const { description, author, email } = req.body;
       const inputUrl = req.file.path;
 
       // Upload to Cloudinary
@@ -134,7 +132,7 @@ const startServer = async () => {
 
         // Create a new video instance
         const newVideo = new Video({
-
+          email,
           description,
           author,
           videoUrl: result.secure_url,
@@ -143,9 +141,9 @@ const startServer = async () => {
         // Save the video to the database
         const savedVideo = await newVideo.save();
 
-        // Update the corresponding user's posts array in the Login schema
-        await Login.updateOne(
-          // Assuming userId is the correct field in your Login schema
+        // Update the corresponding user's posts array in the UserInfo schema
+        await UserInfo.findOneAndUpdate(
+          { email }, // Assuming email is the unique identifier for users
           { $push: { posts: savedVideo._id } }
         );
 
@@ -167,7 +165,7 @@ const startServer = async () => {
 
   app.post("/reels", async (req, res) => {
     try {
-      const { userId } = req.body;
+      const { email } = req.body;
       // Fetch all videos from the database
       const videos = await Video.find().sort({ createdAt: -1 });
 
@@ -176,10 +174,10 @@ const startServer = async () => {
         videos.map(async (video) => {
           const authorName = await getAuthorName(video.author);
           const profilePic = await getProfilePic(video.author);
-          const likedStatus = await isVideoLikedByUser(video._id, userId);
+          const likedStatus = await isVideoLikedByUser(video._id, email);
           const likesCount = video.likes.length;
           const commentsCount = video.comments.length;
-          const savedStatus = await isVideoSavedByUser(video._id, userId);
+          const savedStatus = await isVideoSavedByUser(video._id, email);
           const savedByCount = video.saved.length;
 
           return {
@@ -237,11 +235,11 @@ const startServer = async () => {
 
   app.post("/usersAndUnseenChatsAndLastMessage", async (req, res) => {
     try {
-      const { userId } = req.body;
+      const { email } = req.body;
       const pipeline = [
         {
           $match: {
-            $or: [{ to: userId }, { from: userId }],
+            $or: [{ to: email }, { from: email }],
           },
         },
         {
@@ -252,11 +250,11 @@ const startServer = async () => {
         {
           $group: {
             _id: {
-              $cond: [{ $eq: ["$from", userId] }, "$to", "$from"],
+              $cond: [{ $eq: ["$from", email] }, "$to", "$from"],
             },
             unseenCount: {
               $sum: {
-                $cond: [{ $eq: ["$to", userId] }, { $cond: ["$seen", 0, 1] }, 0],
+                $cond: [{ $eq: ["$to", email] }, { $cond: ["$seen", 0, 1] }, 0],
               },
             },
             lastMessage: {
@@ -269,12 +267,12 @@ const startServer = async () => {
       const chattedUsers = await Message.aggregate(pipeline);
 
       // Get an array of unique user IDs from the chattedUsers result
-      const userIds = chattedUsers.map((user) => user._id);
+      const emails = chattedUsers.map((user) => user._id);
 
-      // Fetch the corresponding user details from the Login collection
-      const userNames = await Login.find({ _id: { $in: userIds } }, "name");
+      // Fetch the corresponding user details from the UserInfo collection
+      const userNames = await UserInfo.find({ _id: { $in: emails } }, "name");
 
-      // Create a map of userId to userName for faster lookup
+      // Create a map of email to userName for faster lookup
       const userNameMap = new Map();
       userNames.forEach((user) =>
         userNameMap.set(user._id.toString(), user.name)
@@ -282,7 +280,7 @@ const startServer = async () => {
 
       // Merge the userName into the chattedUsers result
       const chattedUsersWithNames = chattedUsers.map((user) => {
-        const person = Login.findOne({ _id: user._id });
+        const person = UserInfo.findOne({ _id: user._id });
         return {
           _id: user._id,
           name: userNameMap.get(user._id.toString()) || "Deleted User",
@@ -301,8 +299,8 @@ const startServer = async () => {
 
   app.post("/getPostsAndSaved", async (req, res) => {
     try {
-      const { userId, reqId } = req.body;
-      const Info = await Login.findOne({ _id: userId });
+      const { email, reqId } = req.body;
+      const Info = await UserInfo.findOne({ _id: email });
       const posts = Info.posts;
       const saved = Info.saved;
       const followers = Info.followers;
@@ -324,7 +322,7 @@ const startServer = async () => {
 
       const followersInfo = await Promise.all(
         followers.map(async (follower) => {
-          const user = await Login.findById(follower);
+          const user = await UserInfo.findById(follower);
           return {
             followerId: follower,
             followerName: user.fancyId,
@@ -336,7 +334,7 @@ const startServer = async () => {
 
       const followingInfo = await Promise.all(
         following.map(async (follow) => {
-          const user = await Login.findById(follow);
+          const user = await UserInfo.findById(follow);
           return {
             followingId: follow,
             followingName: user.fancyId,
@@ -356,7 +354,7 @@ const startServer = async () => {
   app.post("/getTokens", async (req, res) => {
     try {
       const { _id } = req.body;
-      const getToken = await Login.findOne({ _id });
+      const getToken = await UserInfo.findOne({ _id });
       if (getToken) {
         res.status(200).json(getToken["tokens"]);
       } else {
@@ -370,7 +368,7 @@ const startServer = async () => {
   app.post("/updateTokens", async (req, res) => {
     try {
       const { _id, tokens } = req.body;
-      const updateToken = await Login.updateOne({ _id }, { $inc: { tokens } });
+      const updateToken = await UserInfo.updateOne({ _id }, { $inc: { tokens } });
       if (updateToken) {
         res.status(200).json({ message: "Tokens updated successfully" });
       } else {
@@ -384,7 +382,7 @@ const startServer = async () => {
   app.post("/storeInterests", async (req, res) => {
     try {
       const { _id, interests } = req.body;
-      const addInterests = await Login.updateOne({ _id }, { interests });
+      const addInterests = await UserInfo.updateOne({ _id }, { interests });
       if (addInterests) {
         res.status(200).json({ message: "Interests updated successfully" });
       } else {
@@ -398,7 +396,7 @@ const startServer = async () => {
   app.post("/getInterests", async (req, res) => {
     try {
       const { _id } = req.body;
-      const getInterests = await Login.findOne({ _id });
+      const getInterests = await UserInfo.findOne({ _id });
       if (getInterests) {
         res.status(200).json(getInterests["interests"]);
       } else {
@@ -417,28 +415,28 @@ const startServer = async () => {
 
   // Helper functions to get additional information
   async function getAuthorName(authorId) {
-    const login = await Login.findOne({ _id: authorId });
+    const login = await UserInfo.findOne({ _id: authorId });
     return login ? login.fancyId : "Unknown";
   }
 
   async function getProfilePic(authorId) {
-    const person = await Login.findById({ _id: authorId });
+    const person = await UserInfo.findById({ _id: authorId });
     return person ? person.profilePic : null;
   }
 
-  async function isVideoLikedByUser(videoId, userId) {
+  async function isVideoLikedByUser(videoId, email) {
     const video = await Video.findById(videoId);
-    return video.likes.includes(userId);
+    return video.likes.includes(email);
   }
 
-  async function isVideoSavedByUser(videoId, userId) {
+  async function isVideoSavedByUser(videoId, email) {
     const video = await Video.findById(videoId);
-    return video.saved.includes(userId);
+    return video.saved.includes(email);
   }
 
   app.post("/like", async (req, res) => {
     try {
-      const { videoId, userId, likedStatus } = req.body;
+      const { videoId, email, likedStatus } = req.body;
 
       // Check if the video exists
       const video = await Video.findById(videoId);
@@ -447,15 +445,15 @@ const startServer = async () => {
       }
 
       // Check if the user has already liked the video
-      const userAlreadyLiked = video.likes.includes(userId);
+      const userAlreadyLiked = video.likes.includes(email);
 
       // Perform like/dislike action based on likedStatus
       if (likedStatus && !userAlreadyLiked) {
 
-        video.likes.push(userId);
+        video.likes.push(email);
       } else if (!likedStatus && userAlreadyLiked) {
 
-        video.likes = video.likes.filter(id => id !== userId);
+        video.likes = video.likes.filter(id => id !== email);
       }
 
       // Save the updated video
@@ -472,13 +470,13 @@ const startServer = async () => {
 
   app.post("/save", async (req, res) => {
     try {
-      const { videoId, userId, savedStatus } = req.body;
+      const { videoId, email, savedStatus } = req.body;
       if (savedStatus) {
-        await Video.updateOne({ _id: videoId }, { $pull: { saved: userId } });
-        await Login.updateOne({ _id: userId }, { $pull: { saved: videoId } });
+        await Video.updateOne({ _id: videoId }, { $pull: { saved: email } });
+        await UserInfo.updateOne({ _id: email }, { $pull: { saved: videoId } });
       } else {
-        await Video.updateOne({ _id: videoId }, { $push: { saved: userId } });
-        await Login.updateOne({ _id: userId }, { $push: { saved: videoId } });
+        await Video.updateOne({ _id: videoId }, { $push: { saved: email } });
+        await UserInfo.updateOne({ _id: email }, { $push: { saved: videoId } });
       }
 
       res.status(200).json({ message: "Video saved/unsaved successfully" });
@@ -489,16 +487,16 @@ const startServer = async () => {
 
   app.post("/likeComment", async (req, res) => {
     try {
-      const { videoId, commentId, userId, likedStatus } = req.body;
+      const { videoId, commentId, email, likedStatus } = req.body;
       if (likedStatus) {
         await Video.updateOne(
           { _id: videoId, "comments._id": new ObjectId(commentId) },
-          { $pull: { "comments.$.likes": userId } }
+          { $pull: { "comments.$.likes": email } }
         );
       } else {
         await Video.updateOne(
           { _id: videoId, "comments._id": new ObjectId(commentId) },
-          { $push: { "comments.$.likes": userId } }
+          { $push: { "comments.$.likes": email } }
         );
       }
       res.status(200).json({ message: "Comment liked/disliked successfully" });
@@ -509,14 +507,14 @@ const startServer = async () => {
 
   app.post("/getComments", async (req, res) => {
     try {
-      const { videoId, userId } = req.body;
+      const { videoId, email } = req.body;
       const video = await Video.findById(videoId);
       const comments = video.comments;
       const commentsWithInfo = await Promise.all(
         comments.map(async (comment) => {
           const authorName = await getAuthorName(comment.author);
           const profilePic = await getProfilePic(comment.author);
-          const likedStatus = await comment.likes.includes(userId);
+          const likedStatus = await comment.likes.includes(email);
           const likesCount = comment.likes.length;
           return {
             ...comment,
@@ -727,8 +725,8 @@ const startServer = async () => {
 
   // forgotPassword
   app.post("/verify-email", async (req, res) => {
-    const { userId } = req.body;
-    const existingUser = await Login.findOne({ userId });
+    const { email } = req.body;
+    const existingUser = await UserInfo.findOne({ email });
     if (existingUser) {
       res.status(200).json({ message: true });
       return;
@@ -738,8 +736,8 @@ const startServer = async () => {
 
   app.post("/change-password", async (req, res) => {
     try {
-      const { userId, password } = req.body;
-      const updatePassword = await Login.updateOne({ userId }, { password });
+      const { email, password } = req.body;
+      const updatePassword = await UserInfo.updateOne({ email }, { password });
       if (updatePassword) {
         res.status(200).json({ message: "Password changed successfully" });
       } else {
@@ -866,7 +864,7 @@ const startServer = async () => {
   app.post("/updateName", async (req, res) => {
     try {
       const { _id, name } = req.body;
-      await Login.updateOne({ _id }, { name });
+      await UserInfo.updateOne({ _id }, { name });
       res.status(200).json({ message: "Name updated successfully" });
     } catch (error) {
       res.status(500).json({ message: "Error updating Name" });
@@ -876,7 +874,7 @@ const startServer = async () => {
   app.post("/updateFancyId", async (req, res) => {
     try {
       const { _id, fancyId } = req.body;
-      await Login.updateOne({ _id }, { fancyId });
+      await UserInfo.updateOne({ _id }, { fancyId });
       res.status(200).json({ message: "FancyId updated successfully" });
     } catch (error) {
       res.status(500).json({ message: "Error updating FancyId" });
@@ -885,8 +883,8 @@ const startServer = async () => {
 
   app.post("/updateEmail", async (req, res) => {
     try {
-      const { _id, userId } = req.body;
-      await Login.updateOne({ _id }, { userId });
+      const { _id, email } = req.body;
+      await UserInfo.updateOne({ _id }, { email });
       res.status(200).json({ message: "Email updated successfully" });
     } catch (error) {
       res.status(500).json({ message: "Error updating Email" });
@@ -896,7 +894,7 @@ const startServer = async () => {
   app.post("/updateSocial", async (req, res) => {
     try {
       const { _id, socialId } = req.body;
-      await Login.updateOne({ _id }, { socialId });
+      await UserInfo.updateOne({ _id }, { socialId });
       res.status(200).json({ message: "Email updated successfully" });
     } catch (error) {
       res.status(500).json({ message: "Error updating Email" });
@@ -906,7 +904,7 @@ const startServer = async () => {
   app.post("/getAllUsers", async (req, res) => {
     try {
       const { _id } = req.body;
-      const users = await Login.find({ _id: { $ne: _id } });
+      const users = await UserInfo.find({ _id: { $ne: _id } });
       const updatedUsers = users.map((user) => ({
         ...user._doc,
         following: user.followers.includes(_id),
@@ -920,7 +918,7 @@ const startServer = async () => {
   app.post("/getUserProfile", async (req, res) => {
     try {
       const { _id, reqId } = req.body;
-      const user = await Login.find({ _id });
+      const user = await UserInfo.find({ _id });
       const updatedUser = {
         ...user[0]._doc,
         following: user[0].followers.includes(reqId),
@@ -935,11 +933,11 @@ const startServer = async () => {
     try {
       const { _id, reqId, followStatus } = req.body;
       if (followStatus) {
-        await Login.updateOne({ _id }, { $pull: { followers: reqId } });
-        await Login.updateOne({ _id: reqId }, { $pull: { following: _id } });
+        await UserInfo.updateOne({ _id }, { $pull: { followers: reqId } });
+        await UserInfo.updateOne({ _id: reqId }, { $pull: { following: _id } });
       } else {
-        await Login.updateOne({ _id }, { $push: { followers: reqId } });
-        await Login.updateOne({ _id: reqId }, { $push: { following: _id } });
+        await UserInfo.updateOne({ _id }, { $push: { followers: reqId } });
+        await UserInfo.updateOne({ _id: reqId }, { $push: { following: _id } });
       }
       res.status(200).json({ message: "Person followed/unfollowed successfully" });
     } catch (error) {
