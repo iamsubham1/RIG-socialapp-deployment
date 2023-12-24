@@ -23,6 +23,7 @@ const cloudinary = require('cloudinary').v2;
 const Video = require('./models/videoSchema');
 const UserInfo = require('./models/userSchema');
 const Message = require('./models/messageSchema');
+const { userInfo } = require("os");
 
 //acquire environment variables
 require('dotenv').config({ path: '.env' });
@@ -163,40 +164,112 @@ const startServer = async () => {
     }
   });
 
-  app.post("/reels", async (req, res) => {
+
+
+  app.get('/uploadedcontent', async (req, res) => {
     try {
       const { email } = req.body;
-      // Fetch all videos from the database
-      const videos = await Video.find().sort({ createdAt: -1 });
+      console.log(req.body);
 
-      // Prepare the response with additional information
-      const reelsWithInfo = await Promise.all(
-        videos.map(async (video) => {
-          const authorName = await getAuthorName(video.author);
-          const profilePic = await getProfilePic(video.author);
-          const likedStatus = await isVideoLikedByUser(video._id, email);
-          const likesCount = video.likes.length;
-          const commentsCount = video.comments.length;
-          const savedStatus = await isVideoSavedByUser(video._id, email);
-          const savedByCount = video.saved.length;
+      // Find the user by email
+      console.log('Email to query:', email);
+      const user = await UserInfo.findOne({ email });
+      console.log('User:', user);
+      if (!user) {
+        return res.status(404).json({ error: 'User not found' });
+      }
+      // Find videos for the user
+      const videos = await Video.find({ email }).sort({ createdAt: -1 });
+      console.log('Videos:', videos);
+      if (!videos) {
+        return res.status(200).json({ message: 'No videos found for the user' });
+      }
 
-          return {
-            ...video.toObject(),
-            authorName,
-            profilePic,
-            likedStatus,
-            likesCount,
-            commentsCount,
-            savedStatus,
-            savedByCount,
-          };
-        })
-      );
+      const reelsWithInfo = videos.map((video) => {
+        const creator = user.name;
+
+
+        return {
+          ...video.toObject(),
+          creator,
+
+        };
+      });
+
       res.status(200).json(reelsWithInfo);
     } catch (error) {
-      res.status(500).json({ error: "Internal server error" });
+      console.error(error);
+      res.status(500).json({ error: 'Internal Server Error' });
     }
   });
+
+  app.get('/reels', async (req, res) => {
+    try {
+      // Find all videos
+
+      const allVideos = await Video.find().sort({ createdAt: -1 });
+
+      if (!allVideos) {
+        return res.status(200).json({ message: 'No videos found' });
+      }
+
+      const videosWithInfo = allVideos.map((video) => {
+
+        return {
+          ...video.toObject(),
+
+          // Add more fields as needed
+        };
+      });
+      console.log(videosWithInfo)
+      res.status(200).json(allVideos);
+    } catch (error) {
+      console.error(error);
+      res.status(500).json({ error: 'Internal Server Error' });
+    }
+  });
+
+  app.post("/likevideo", async (req, res) => {
+    try {
+      const { videoId, email, likedStatus } = req.body;
+
+      // Check if the video exists
+      const video = await Video.findById(videoId);
+      if (!video) {
+        return res.status(404).json({ message: "Video not found" });
+      }
+
+      // Check if the user has already liked the video
+      const userAlreadyLiked = video.likes.includes(email);
+
+      // Perform like/dislike action based on likedStatus
+      if (likedStatus && !userAlreadyLiked) {
+
+        video.likes.push(email);
+      } else if (!likedStatus && userAlreadyLiked) {
+
+        video.likes = video.likes.filter(id => id !== email);
+      }
+
+      // Save the updated video
+      await video.save();
+
+      res.status(200).json({ message: "Video liked/disliked successfully" });
+    } catch (error) {
+      console.error(error);
+      res.status(500).json({ message: "Error liking/disliking video" });
+    }
+  });
+
+
+
+
+
+
+
+
+
+
   app.post("/message", async (req, res) => {
     try {
       const { from, to, message } = req.body;
@@ -433,38 +506,6 @@ const startServer = async () => {
     const video = await Video.findById(videoId);
     return video.saved.includes(email);
   }
-
-  app.post("/like", async (req, res) => {
-    try {
-      const { videoId, email, likedStatus } = req.body;
-
-      // Check if the video exists
-      const video = await Video.findById(videoId);
-      if (!video) {
-        return res.status(404).json({ message: "Video not found" });
-      }
-
-      // Check if the user has already liked the video
-      const userAlreadyLiked = video.likes.includes(email);
-
-      // Perform like/dislike action based on likedStatus
-      if (likedStatus && !userAlreadyLiked) {
-
-        video.likes.push(email);
-      } else if (!likedStatus && userAlreadyLiked) {
-
-        video.likes = video.likes.filter(id => id !== email);
-      }
-
-      // Save the updated video
-      await video.save();
-
-      res.status(200).json({ message: "Video liked/disliked successfully" });
-    } catch (error) {
-      console.error(error);
-      res.status(500).json({ message: "Error liking/disliking video" });
-    }
-  });
 
 
 
