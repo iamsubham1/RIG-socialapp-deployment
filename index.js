@@ -33,9 +33,9 @@ require('dotenv').config({ path: '.env' });
 const mongoURI = process.env.MONGODB_URI;
 
 
-// const cloudname = process.env.cloud_name;
-// const apikey = process.env.api_key;
-// const apisecret = process.env.api_secret;
+const cloudname = process.env.cloud_name;
+const apikey = process.env.api_key;
+const apisecret = process.env.api_secret;
 
 process.on('unhandledRejection', (reason, promise) => {
   console.error('Unhandled Rejection at:', promise, 'reason:', reason);
