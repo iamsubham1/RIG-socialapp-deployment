@@ -2,8 +2,7 @@ const mongoose = require('mongoose');
 
 const videoSchema = new mongoose.Schema({
     email: { type: String, ref: 'userInfo' },
-    creator: { type: String, ref: 'userInfo' },
-    author: String,
+    author: { type: String, ref: 'userInfo.name' },
     description: String,
     videoUrl: String,
     thumbnailUrl: String,

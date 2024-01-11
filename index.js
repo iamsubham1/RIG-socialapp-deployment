@@ -18,8 +18,11 @@ const app = express();
 const server = http.createServer(app);
 const io = new Server(server);
 const cloudinary = require('cloudinary').v2;
+const jwt = require('jsonwebtoken');
+const verifyUser = require('../netteam-backend/middleware/verifyuser')
 
 //importing schemas
+
 const Video = require('./models/videoSchema');
 const UserInfo = require('./models/userSchema');
 const Message = require('./models/messageSchema');
@@ -28,22 +31,24 @@ const { userInfo } = require("os");
 //acquire environment variables
 require('dotenv').config({ path: '.env' });
 const mongoURI = process.env.MONGODB_URI;
-const cloudname = process.env.cloud_name;
-const apikey = process.env.api_key;
-const apisecret = process.env.api_secret;
 
+
+// const cloudname = process.env.cloud_name;
+// const apikey = process.env.api_key;
+// const apisecret = process.env.api_secret;
 
 process.on('unhandledRejection', (reason, promise) => {
   console.error('Unhandled Rejection at:', promise, 'reason:', reason);
 
 });
+
 const upload = multer({ dest: 'temp' });
 
 // Cloudinary configuration
 cloudinary.config({
-  cloud_name: cloudname,
-  api_key: apikey,
-  api_secret: apisecret,
+  cloud_name: 'dmb0ooxo5',
+  api_key: '961269617798218',
+  api_secret: 'Xce-92wwLFRdAonPK59BCWcAooU'
 });
 
 const startServer = async () => {
@@ -109,7 +114,20 @@ const startServer = async () => {
 
       if (login) {
         res.status(200).send("login succesfully")
-      } else {
+
+        const data = {
+          userInfo: {
+            email: userInfo.email
+          }
+        }
+        console.log(data)
+        const token = jwt.sign(data, 'shhhhh');
+        console.log(token)
+      }
+
+
+
+      else {
 
         res.status(404).json({ message: "UserInfo not found" });
       }
@@ -117,10 +135,11 @@ const startServer = async () => {
       res.status(500).json({ message: "Error retrieving login" });
     }
   });
-  app.post('/upload', upload.single('video'), async (req, res) => {
+
+  app.post('/upload', verifyUser, upload.single('video'), async (req, res) => {
 
     try {
-      const { description, author, email } = req.body;
+      const { description, email, author } = req.body;
       const inputUrl = req.file.path;
 
       // Upload to Cloudinary
@@ -164,8 +183,6 @@ const startServer = async () => {
     }
   });
 
-
-
   app.get('/uploadedcontent', async (req, res) => {
     try {
       const { email } = req.body;
@@ -206,69 +223,37 @@ const startServer = async () => {
   app.get('/reels', async (req, res) => {
     try {
       // Find all videos
-
+      const { email } = req.body;
       const allVideos = await Video.find().sort({ createdAt: -1 });
 
       if (!allVideos) {
         return res.status(200).json({ message: 'No videos found' });
       }
 
-      const videosWithInfo = allVideos.map((video) => {
 
-        return {
-          ...video.toObject(),
+      //create instance
+      const videosWithInfo = await Promise.all(
+        allVideos.map(async (video) => {
+          const authorName = await getAuthorName(video.author);
+          const profilePic = await getProfilePic(video.author);
 
-          // Add more fields as needed
-        };
-      });
-      console.log(videosWithInfo)
-      res.status(200).json(allVideos);
+
+          return {
+            ...video.toObject(),
+            authorName,
+            profilePic,
+
+
+          };
+        })
+      )
+      // Add more fields as needed
+      res.status(200).json(videosWithInfo);
     } catch (error) {
       console.error(error);
       res.status(500).json({ error: 'Internal Server Error' });
     }
   });
-
-  app.post("/likevideo", async (req, res) => {
-    try {
-      const { videoId, email, likedStatus } = req.body;
-
-      // Check if the video exists
-      const video = await Video.findById(videoId);
-      if (!video) {
-        return res.status(404).json({ message: "Video not found" });
-      }
-
-      // Check if the user has already liked the video
-      const userAlreadyLiked = video.likes.includes(email);
-
-      // Perform like/dislike action based on likedStatus
-      if (likedStatus && !userAlreadyLiked) {
-
-        video.likes.push(email);
-      } else if (!likedStatus && userAlreadyLiked) {
-
-        video.likes = video.likes.filter(id => id !== email);
-      }
-
-      // Save the updated video
-      await video.save();
-
-      res.status(200).json({ message: "Video liked/disliked successfully" });
-    } catch (error) {
-      console.error(error);
-      res.status(500).json({ message: "Error liking/disliking video" });
-    }
-  });
-
-
-
-
-
-
-
-
-
 
   app.post("/message", async (req, res) => {
     try {
@@ -423,7 +408,6 @@ const startServer = async () => {
     }
   });
 
-
   app.post("/getTokens", async (req, res) => {
     try {
       const { _id } = req.body;
@@ -480,18 +464,14 @@ const startServer = async () => {
     }
   });
 
-
   app.use("/temp", express.static(path.join(__dirname, "temp")));
-
-
-
 
   // Helper functions to get additional information
   async function getAuthorName(authorId) {
-    const login = await UserInfo.findOne({ _id: authorId });
+    const login = await UserInfo.findOne({ authorId });
+    console.log(login);
     return login ? login.fancyId : "Unknown";
   }
-
   async function getProfilePic(authorId) {
     const person = await UserInfo.findById({ _id: authorId });
     return person ? person.profilePic : null;
@@ -507,7 +487,37 @@ const startServer = async () => {
     return video.saved.includes(email);
   }
 
+  app.post("/like", async (req, res) => {
+    try {
+      const { videoId, email, likedStatus } = req.body;
 
+      // Check if the video exists
+      const video = await Video.findById(videoId);
+      if (!video) {
+        return res.status(404).json({ message: "Video not found" });
+      }
+
+      // Check if the user has already liked the video
+      const userAlreadyLiked = video.likes.includes(email);
+
+      // Perform like/dislike action based on likedStatus
+      if (likedStatus && !userAlreadyLiked) {
+
+        video.likes.push(email);
+      } else if (!likedStatus && userAlreadyLiked) {
+
+        video.likes = video.likes.filter(id => id !== email);
+      }
+
+      // Save the updated video
+      await video.save();
+
+      res.status(200).json({ message: "Video liked/disliked successfully" });
+    } catch (error) {
+      console.error(error);
+      res.status(500).json({ message: "Error liking/disliking video" });
+    }
+  });
 
   app.post("/save", async (req, res) => {
     try {
