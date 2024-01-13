@@ -1,7 +1,11 @@
-FROM node
+FROM ubuntu
 
-# Install FFmpeg
-RUN apt-get update && apt-get install -y ffmpeg
+# Install dependencies
+RUN apt-get update && \
+    apt-get install -y ffmpeg curl && \
+    curl -fsSL https://deb.nodesource.com/setup_lts.x | bash - && \
+    apt-get upgrade -y && \
+    apt install -y nodejs
 
 # Set the working directory
 WORKDIR /usr/src/app
@@ -16,5 +20,4 @@ RUN npm install
 COPY . .
 
 # Specify the start command
-CMD [ "npm", "start" ]
-
+CMD ["node", "index.js"]

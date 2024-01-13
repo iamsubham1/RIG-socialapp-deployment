@@ -19,7 +19,7 @@ const server = http.createServer(app);
 const io = new Server(server);
 const cloudinary = require('cloudinary').v2;
 const jwt = require('jsonwebtoken');
-const verifyUser = require('../netteam-backend/middleware/verifyuser')
+const verifyUser = require('./middleware/verifyuser')
 const bcrypt = require("bcryptjs");
 const ffmpeg = require('fluent-ffmpeg');
 const cookieParser = require("cookie-parser");
@@ -104,7 +104,7 @@ const startServer = async () => {
   connectToMongo();
 
   app.get('/', (req, res) => {
-    res.send("hello")
+    res.send("welcome to RIG Socialmedia-app")
   })
 
   //tested
