@@ -1,6 +1,6 @@
 
 const jwt = require('jsonwebtoken');
-const signature = 'shhhhh';
+require('dotenv').config({ path: '.env' });
 
 const verifyUser = (req, res, next) => {
     try {
@@ -13,12 +13,11 @@ const verifyUser = (req, res, next) => {
         }
 
         // Verify the token
-        const decoded = jwt.verify(token, signature);
+        const decoded = jwt.verify(token, process.env.JWT_SIGNATURE);
 
         // Attach user email to req.user
         console.log('Decoded Token:', decoded);
-        req.userEmail = decoded.email;
-
+        req.user = decoded;
         // Continue to the next middleware or route handler
         next();
     } catch (error) {

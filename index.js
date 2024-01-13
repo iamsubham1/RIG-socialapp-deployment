@@ -20,6 +20,11 @@ const io = new Server(server);
 const cloudinary = require('cloudinary').v2;
 const jwt = require('jsonwebtoken');
 const verifyUser = require('../netteam-backend/middleware/verifyuser')
+const bcrypt = require("bcryptjs");
+const ffmpeg = require('fluent-ffmpeg');
+const cookieParser = require("cookie-parser");
+const bodyParser = require('body-parser');
+const { body, validationResult } = require('express-validator');
 
 //importing schemas
 
@@ -32,12 +37,6 @@ const { userInfo } = require("os");
 require('dotenv').config({ path: '.env' });
 const mongoURI = process.env.MONGODB_URI;
 
-
-// const cloudname = process.env.cloud_name;
-// const apikey = process.env.api_key;
-// const apisecret = process.env.api_secret;
-
-
 process.on('unhandledRejection', (reason, promise) => {
   console.error('Unhandled Rejection at:', promise, 'reason:', reason);
 
@@ -45,15 +44,45 @@ process.on('unhandledRejection', (reason, promise) => {
 
 const upload = multer({ dest: 'temp' });
 
+//cookie parser
+app.use(cookieParser());
+app.use(bodyParser.urlencoded({ extended: true }));
+
 // Cloudinary configuration
 cloudinary.config({
-  cloud_name: 'dmb0ooxo5',
-  api_key: '961269617798218',
-  api_secret: 'Xce-92wwLFRdAonPK59BCWcAooU'
+  cloud_name: process.env.cloud_name,
+  api_key: process.env.api_key,
+  api_secret: process.env.api_secret,
 });
 
-const startServer = async () => {
 
+const ffmpegPath = process.env.FFMPEG_PATH || 'C:/ffmpegpath';
+
+ffmpeg.setFfmpegPath(ffmpegPath);
+
+const startServer = async () => {
+  // Helper functions to get additional information
+  async function getAuthorName(authorId) {
+    const login = await UserInfo.findOne({ authorId });
+    console.log(login);
+    return login ? login.fancyId : "Unknown";
+  }
+  async function getProfilePic(authorId) {
+    const person = await UserInfo.findById({ _id: authorId });
+    return person ? person.profilePic : null;
+  }
+
+  async function isVideoLikedByUser(videoId, email) {
+    console.log('Checking liked status for videoId:', videoId, 'and email:', email);
+    const video = await Video.findById(videoId);
+    console.log('Video:', video);
+    return video.likes.includes(email);
+  }
+
+  async function isVideoSavedByUser(videoId, email) {
+    const video = await Video.findById(videoId);
+    return video.saved.includes(email);
+  }
   // Serve the static files
   app.use(express.static("public"));
   app.use(cors({ origin: process.env.CLIENT_URL }));
@@ -80,19 +109,30 @@ const startServer = async () => {
 
   //tested
 
-  app.post("/signup", async (req, res) => {
+  app.post("/signup", [
+    // Validation middleware
+    body('password')
+      .matches(/^(?=.*[A-Za-z])(?=.*\d)[A-Za-z\d]{8,}$/)
+      .withMessage('Password must be at least 8 characters and include alphabets and numbers'),
+  ], async (req, res) => {
+
+
     try {
       const { name, email, password } = req.body;
 
       // Check if the user already exists
       const existingUser = await UserInfo.findOne({ email });
 
-      if (existingUser) {
-        res.status(409).json({ message: "User already exists" });
-      } else {
+      if (!existingUser) {
+        const errors = validationResult(req);
+        if (!errors.isEmpty()) {
+          return res.status(400).json({ errors: [{ msg: errors.errors[0].msg }] });
+
+        }
         // Create a new user
+        const hashPassword = await bcrypt.hash(password, 13);
         const fancyId = email.split("@")[0];
-        const newUser = new UserInfo({ name, email, password, fancyId });
+        const newUser = new UserInfo({ name, email, password: hashPassword, fancyId });
 
         // Save the new user to the database
         await newUser.save();
@@ -100,89 +140,132 @@ const startServer = async () => {
         const userData = await UserInfo.findOne({ email });
 
         res.status(200).json({ message: "User created successfully", _ID: userData["_id"] });
+      } else {
+        res.status(409).json({ message: "User already exists" });
       }
     } catch (error) {
       res.status(500).json({ message: "Error creating user" });
     }
   });
 
-  app.post("/login", async (req, res) => {
-    try {
-      const { email, password } = req.body;
+  app.post("/login", [
+    body('email', 'Enter a valid email').isEmail(),
+    body('password', 'Password cannot be empty').exists(),
+  ],
+    async (req, res) => {
+      try {
+        const { email, password } = req.body;
+        // Find a document where email and password match
+        const user = await UserInfo.findOne({ email });
+        if (!user) {
 
-      // Find a document where email and password match
-      const login = await UserInfo.findOne({ email, password });
-
-      if (login) {
-        res.status(200).send("login succesfully")
-
-        const data = {
-          userInfo: {
-            email: userInfo.email
-          }
+          return res.status(401).json({ msg: "User not found" });
         }
-        console.log(data)
-        const token = jwt.sign(data, 'shhhhh');
-        console.log(token)
+        const passwordCompare = bcrypt.compare(password, user.password);
+        if (passwordCompare) {
+          const token = jwt.sign({ email: user.email, name: user.name }, process.env.JWT_SIGNATURE);
+          const MaxAge = process.env.cookieMaxAge * 24 * 60 * 60 * 1000;
+          console.log(token)
+          //setcookie
+          res.cookie("token", token, {
+            httpOnly: true,
+            maxAge: MaxAge,
+          });
+
+
+          return res.status(200).json({ msg: "Login successful" });
+
+        } else {
+
+          return res.status(401).json({ msg: "Incorrect credentials" });
+        }
+      } catch (error) {
+
+        res.status(500).json({ message: "Error retrieving login", error });
       }
+    });
 
-
-
-      else {
-
-        res.status(404).json({ message: "UserInfo not found" });
-      }
-    } catch (error) {
-      res.status(500).json({ message: "Error retrieving login" });
-    }
-  });
 
   app.post('/upload', verifyUser, upload.single('video'), async (req, res) => {
-
     try {
       const { description, email, author } = req.body;
       const inputUrl = req.file.path;
 
-      // Upload to Cloudinary
-      cloudinary.uploader.upload(inputUrl, { resource_type: 'video' }, async (error, result) => {
-        if (error) {
-          console.error(`Error uploading to Cloudinary: ${error}`);
-          res.status(500).send('Error uploading to Cloudinary');
-          return;
-        }
+      const thumbnailPath = `./images/thumbnail.png`;
 
-        // Create a new video instance
-        const newVideo = new Video({
-          email,
-          description,
-          author,
-          videoUrl: result.secure_url,
+      // generate thumbnail
+      ffmpeg(inputUrl)
+        .screenshots({
+          count: 1,
+          filename: 'thumbnail.png',
+          size: '320x240',
+          folder: './images',
+        })
+        .on('end', () => {
+          console.log('Thumbnail generated successfully!');
+
+          // Upload thumbnail
+          cloudinary.uploader.upload(thumbnailPath, { folder: 'thumbnails' }, async (error, thumbnailResult) => {
+            if (error) {
+              console.error(`Error uploading thumbnail to Cloudinary: ${error}`);
+              res.status(500).send('Error uploading thumbnail to Cloudinary');
+              return;
+            }
+
+            // Upload to Cloudinary
+            cloudinary.uploader.upload(inputUrl, { resource_type: 'video' }, async (error, result) => {
+              if (error) {
+                console.error(`Error uploading to Cloudinary: ${error}`);
+                res.status(500).send('Error uploading to Cloudinary');
+                return;
+              }
+
+              // Create a new video instance
+              const newVideo = new Video({
+                email,
+                description,
+                author,
+                videoUrl: result.secure_url,
+                thumbnailUrl: thumbnailResult.secure_url,
+              });
+
+              // Save the video to the database
+              const savedVideo = await newVideo.save();
+
+              // Delete temporary videofile
+              fs.unlink(inputUrl, (err) => {
+                if (err) {
+                  console.error(`Error deleting file: ${err}`);
+                }
+                console.log('Temporary file deleted successfully');
+              });
+
+              // Delete temporary thumbnailfile
+              fs.unlink(thumbnailPath, (err) => {
+                if (err) {
+                  console.error(`Error deleting thumbnail file: ${err}`);
+                }
+                console.log('Temporary thumbnail file deleted successfully');
+              });
+              // Update the corresponding user's posts array in the UserInfo schema
+              await UserInfo.findOneAndUpdate(
+                { email },
+                { $push: { posts: savedVideo._id } }
+              );
+              res.status(201).json({ message: 'Video uploaded successfully' });
+            });
+          });
+        })
+        .on('error', (err) => {
+          console.error('Error generating thumbnail:', err);
+          res.status(500).json({ message: 'Error generating thumbnail' });
         });
-
-        // Save the video to the database
-        const savedVideo = await newVideo.save();
-
-        // Update the corresponding user's posts array in the UserInfo schema
-        await UserInfo.findOneAndUpdate(
-          { email }, // Assuming email is the unique identifier for users
-          { $push: { posts: savedVideo._id } }
-        );
-
-        res.status(201).json({ message: 'Video uploaded successfully' });
-
-        // Delete temporary file
-        fs.unlink(inputUrl, (err) => {
-          if (err) {
-            console.error(`Error deleting file: ${err}`);
-          }
-          console.log('Temporary file deleted successfully');
-        });
-      });
     } catch (error) {
       console.error(error);
       res.status(500).json({ message: 'Error uploading video' });
     }
   });
+
 
   app.get('/uploadedcontent', async (req, res) => {
     try {
@@ -223,46 +306,203 @@ const startServer = async () => {
 
   app.get('/reels', async (req, res) => {
     try {
-      // Find all videos
       const { email } = req.body;
       const allVideos = await Video.find().sort({ createdAt: -1 });
 
-      if (!allVideos) {
+      if (!allVideos || allVideos.length === 0) {
         return res.status(200).json({ message: 'No videos found' });
       }
 
-
-      //create instance
+      // Create an array of video objects with additional information
       const videosWithInfo = await Promise.all(
         allVideos.map(async (video) => {
+          // Get author's name using a helper function getAuthorName
           const authorName = await getAuthorName(video.author);
-          // const profilePic = await getProfilePic(video.author);
+
+          // Get liked status using isVideoLikedByUser helper function
           const likedStatus = await isVideoLikedByUser(video._id, email);
+          // console.log(`Video ID: ${video._id}, User Email: ${email}, Liked Status: ${likedStatus}`);
+
+          // Get the number of likes, comments, and saved status using video properties
           const likesCount = video.likes.length;
           const commentsCount = video.comments.length;
           const savedStatus = await isVideoSavedByUser(video._id, email);
           const savedByCount = video.saved.length;
 
+          // Return an object with video details and additional information
           return {
             ...video.toObject(),
             authorName,
-            // profilePic,
             likedStatus,
             likesCount,
             commentsCount,
             savedStatus,
             savedByCount,
-
           };
         })
-      )
-      // Add more fields as needed
+      );
+
+      // Respond with the array of videos and additional information
       res.status(200).json(videosWithInfo);
     } catch (error) {
       console.error(error);
       res.status(500).json({ error: 'Internal Server Error' });
     }
   });
+
+
+  app.post("/like", async (req, res) => {
+    try {
+      const { videoId, email, likedStatus } = req.body;
+
+      // Check if the video exists
+      const video = await Video.findById(videoId);
+      if (!video) {
+        console.error('Video not found');
+        return res.status(404).json({ message: "Video not found" });
+      }
+
+      // Check if the user has already liked the video
+      const userAlreadyLiked = video.likes.includes(email);
+
+      // Perform like/dislike action based on likedStatus
+      if (likedStatus && !userAlreadyLiked) {
+        console.log('Adding like for user:', email);
+        video.likes.push(email);
+      } else if (!likedStatus && userAlreadyLiked) {
+        console.log('Removing like for user:', email);
+        video.likes = video.likes.filter(id => id !== email);
+      }
+
+      // Save the updated video
+      await video.save();
+
+      console.log('Video liked/disliked successfully');
+      res.status(200).json({ message: "Video liked/disliked successfully" });
+    } catch (error) {
+      console.error('Error liking/disliking video:', error);
+      res.status(500).json({ message: "Error liking/disliking video" });
+    }
+  });
+
+
+  app.post("/likeComment", async (req, res) => {
+    try {
+      const { videoId, commentId, email, likedStatus } = req.body;
+      if (likedStatus) {
+        await Video.updateOne(
+          { _id: videoId, "comments._id": new ObjectId(commentId) },
+          { $pull: { "comments.$.likes": email } }
+        );
+      } else {
+        await Video.updateOne(
+          { _id: videoId, "comments._id": new ObjectId(commentId) },
+          { $push: { "comments.$.likes": email } }
+        );
+      }
+      res.status(200).json({ message: "Comment liked/disliked successfully" });
+    } catch (error) {
+      res.status(500).json({ message: "Error liking/disliking comment" });
+    }
+  });
+
+  app.post("/getComments", async (req, res) => {
+    try {
+      const { videoId, email } = req.body;
+      const video = await Video.findById(videoId);
+      const comments = video.comments;
+      const commentsWithInfo = await Promise.all(
+        comments.map(async (comment) => {
+          const authorName = await getAuthorName(comment.author);
+          const profilePic = await getProfilePic(comment.author);
+          const likedStatus = await comment.likes.includes(email);
+          const likesCount = comment.likes.length;
+          return {
+            ...comment,
+            authorName,
+            profilePic,
+            likedStatus,
+            likesCount,
+          };
+        })
+      );
+      res.status(200).json(commentsWithInfo);
+    } catch (error) {
+      res.status(500).json({ message: "Error retrieving comments" });
+    }
+  });
+
+  app.post("/postComment", async (req, res) => {
+    try {
+      const { videoId, author, comment } = req.body;
+      const id = new ObjectId();
+      await Video.updateOne(
+        { _id: videoId },
+        { $push: { comments: { _id: id, author, comment, likes: [] } } }
+      );
+      res.status(200).send("commented successfully");
+    } catch (error) {
+      res.status(500).json({ message: "Error posting comment" });
+    }
+  });
+
+  app.post("/deletecomment", async (req, res) => {
+    try {
+      const { videoId, commentId } = req.body;
+
+      // Check if the video exists
+      const video = await Video.findById(videoId);
+      if (!video) {
+        return res.status(404).json({ message: "Video not found" });
+      }
+
+      // Find the index of the comment in the comments array
+      const commentIndex = video.comments.findIndex(comment => comment._id.toString() === commentId);
+
+      // Check if the comment exists
+      if (commentIndex === -1) {
+        return res.status(404).json({ message: "Comment not found" });
+      }
+
+      // Remove the comment from the comments array
+      video.comments.splice(commentIndex, 1);
+
+      // Save the updated video
+      await video.save();
+
+      res.status(200).json({ message: "Comment deleted successfully" });
+    } catch (error) {
+      console.error(error);
+      res.status(500).json({ message: "Error deleting comment" });
+    }
+  });
+
+  app.post("/save", async (req, res) => {
+    try {
+      const { videoId, userId, savedStatus } = req.body;
+
+      if (savedStatus) {
+        // console.log(`Removing save for video ID ${videoId} and user ${userId}`);
+        await Video.updateOne({ _id: videoId }, { $pull: { saved: userId } });
+        await UserInfo.updateOne({ _id: userId }, { $pull: { saved: videoId } });
+      } else {
+        // console.log(`Adding save for video ID ${videoId} and user ${userId}`);
+        await Video.updateOne({ _id: videoId }, { $push: { saved: userId } });
+        await UserInfo.updateOne({ _id: userId }, { $push: { saved: videoId } });
+      }
+
+      // console.log("Video saved/unsaved successfully");
+      res.status(200).json({ message: "Video saved/unsaved successfully", savedStatus: !savedStatus });
+
+    } catch (error) {
+      // console.error("Error saving/unsaving video:", error);
+      res.status(500).json({ message: "Error saving/unsaving video" });
+    }
+  });
+
+
+
+  //not tested 
 
   app.post("/message", async (req, res) => {
     try {
@@ -476,168 +716,12 @@ const startServer = async () => {
 
   app.use("/temp", express.static(path.join(__dirname, "temp")));
 
-  // Helper functions to get additional information
-  async function getAuthorName(authorId) {
-    const login = await UserInfo.findOne({ authorId });
-    console.log(login);
-    return login ? login.fancyId : "Unknown";
-  }
-  async function getProfilePic(authorId) {
-    const person = await UserInfo.findById({ _id: authorId });
-    return person ? person.profilePic : null;
-  }
-
-  async function isVideoLikedByUser(videoId, email) {
-    const video = await Video.findById(videoId);
-    return video.likes.includes(email);
-  }
-
-  async function isVideoSavedByUser(videoId, email) {
-    const video = await Video.findById(videoId);
-    return video.saved.includes(email);
-  }
-
-  app.post("/like", async (req, res) => {
-    try {
-      const { videoId, email, likedStatus } = req.body;
-
-      // Check if the video exists
-      const video = await Video.findById(videoId);
-      if (!video) {
-        return res.status(404).json({ message: "Video not found" });
-      }
-
-      // Check if the user has already liked the video
-      const userAlreadyLiked = video.likes.includes(email);
-
-      // Perform like/dislike action based on likedStatus
-      if (likedStatus && !userAlreadyLiked) {
-
-        video.likes.push(email);
-      } else if (!likedStatus && userAlreadyLiked) {
-
-        video.likes = video.likes.filter(id => id !== email);
-      }
-
-      // Save the updated video
-      await video.save();
-
-      res.status(200).json({ message: "Video liked/disliked successfully" });
-    } catch (error) {
-      console.error(error);
-      res.status(500).json({ message: "Error liking/disliking video" });
-    }
-  });
 
 
 
-  app.post("/save", async (req, res) => {
-    try {
-      const { videoId, email, savedStatus } = req.body;
-      if (savedStatus) {
-        await Video.updateOne({ _id: videoId }, { $pull: { saved: email } });
-        await UserInfo.updateOne({ _id: email }, { $pull: { saved: videoId } });
-      } else {
-        await Video.updateOne({ _id: videoId }, { $push: { saved: email } });
-        await UserInfo.updateOne({ _id: email }, { $push: { saved: videoId } });
-      }
 
-      res.status(200).json({ message: "Video saved/unsaved successfully" });
-    } catch (error) {
-      res.status(500).json({ message: "Error saving/unsaving video" });
-    }
-  });
 
-  app.post("/likeComment", async (req, res) => {
-    try {
-      const { videoId, commentId, email, likedStatus } = req.body;
-      if (likedStatus) {
-        await Video.updateOne(
-          { _id: videoId, "comments._id": new ObjectId(commentId) },
-          { $pull: { "comments.$.likes": email } }
-        );
-      } else {
-        await Video.updateOne(
-          { _id: videoId, "comments._id": new ObjectId(commentId) },
-          { $push: { "comments.$.likes": email } }
-        );
-      }
-      res.status(200).json({ message: "Comment liked/disliked successfully" });
-    } catch (error) {
-      res.status(500).json({ message: "Error liking/disliking comment" });
-    }
-  });
 
-  app.post("/getComments", async (req, res) => {
-    try {
-      const { videoId, email } = req.body;
-      const video = await Video.findById(videoId);
-      const comments = video.comments;
-      const commentsWithInfo = await Promise.all(
-        comments.map(async (comment) => {
-          const authorName = await getAuthorName(comment.author);
-          const profilePic = await getProfilePic(comment.author);
-          const likedStatus = await comment.likes.includes(email);
-          const likesCount = comment.likes.length;
-          return {
-            ...comment,
-            authorName,
-            profilePic,
-            likedStatus,
-            likesCount,
-          };
-        })
-      );
-      res.status(200).json(commentsWithInfo);
-    } catch (error) {
-      res.status(500).json({ message: "Error retrieving comments" });
-    }
-  });
-
-  app.post("/postComment", async (req, res) => {
-    try {
-      const { videoId, author, comment } = req.body;
-      const id = new ObjectId();
-      await Video.updateOne(
-        { _id: videoId },
-        { $push: { comments: { _id: id, author, comment, likes: [] } } }
-      );
-      res.status(200).send("commented successfully");
-    } catch (error) {
-      res.status(500).json({ message: "Error posting comment" });
-    }
-  });
-
-  app.post("/deletecomment", async (req, res) => {
-    try {
-      const { videoId, commentId } = req.body;
-
-      // Check if the video exists
-      const video = await Video.findById(videoId);
-      if (!video) {
-        return res.status(404).json({ message: "Video not found" });
-      }
-
-      // Find the index of the comment in the comments array
-      const commentIndex = video.comments.findIndex(comment => comment._id.toString() === commentId);
-
-      // Check if the comment exists
-      if (commentIndex === -1) {
-        return res.status(404).json({ message: "Comment not found" });
-      }
-
-      // Remove the comment from the comments array
-      video.comments.splice(commentIndex, 1);
-
-      // Save the updated video
-      await video.save();
-
-      res.status(200).json({ message: "Comment deleted successfully" });
-    } catch (error) {
-      console.error(error);
-      res.status(500).json({ message: "Error deleting comment" });
-    }
-  });
 
   function matchSockets(socket) {
     if (availableUsers.size < 2) {
