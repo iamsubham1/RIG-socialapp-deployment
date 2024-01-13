@@ -33,9 +33,10 @@ require('dotenv').config({ path: '.env' });
 const mongoURI = process.env.MONGODB_URI;
 
 
-const cloudname = process.env.cloud_name;
-const apikey = process.env.api_key;
-const apisecret = process.env.api_secret;
+// const cloudname = process.env.cloud_name;
+// const apikey = process.env.api_key;
+// const apisecret = process.env.api_secret;
+
 
 process.on('unhandledRejection', (reason, promise) => {
   console.error('Unhandled Rejection at:', promise, 'reason:', reason);
@@ -235,14 +236,22 @@ const startServer = async () => {
       const videosWithInfo = await Promise.all(
         allVideos.map(async (video) => {
           const authorName = await getAuthorName(video.author);
-          const profilePic = await getProfilePic(video.author);
-
+          // const profilePic = await getProfilePic(video.author);
+          const likedStatus = await isVideoLikedByUser(video._id, email);
+          const likesCount = video.likes.length;
+          const commentsCount = video.comments.length;
+          const savedStatus = await isVideoSavedByUser(video._id, email);
+          const savedByCount = video.saved.length;
 
           return {
             ...video.toObject(),
             authorName,
-            profilePic,
-
+            // profilePic,
+            likedStatus,
+            likesCount,
+            commentsCount,
+            savedStatus,
+            savedByCount,
 
           };
         })
@@ -464,6 +473,7 @@ const startServer = async () => {
     }
   });
 
+
   app.use("/temp", express.static(path.join(__dirname, "temp")));
 
   // Helper functions to get additional information
@@ -518,6 +528,8 @@ const startServer = async () => {
       res.status(500).json({ message: "Error liking/disliking video" });
     }
   });
+
+
 
   app.post("/save", async (req, res) => {
     try {

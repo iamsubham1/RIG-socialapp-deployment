@@ -19,8 +19,6 @@ const verifyUser = (req, res, next) => {
         console.log('Decoded Token:', decoded);
         req.userEmail = decoded.email;
 
-
-
         // Continue to the next middleware or route handler
         next();
     } catch (error) {
