@@ -84,8 +84,9 @@ const startServer = async () => {
     return video.saved.includes(email);
   }
   // Serve the static files
+
   app.use(express.static("public"));
-  app.use(cors({ origin: process.env.CLIENT_URL }));
+  app.use(cors());
   app.use(express.json());
 
 
@@ -112,8 +113,8 @@ const startServer = async () => {
   app.post("/signup", [
     // Validation middleware
     body('password')
-      .matches(/^(?=.*[A-Za-z])(?=.*\d)[A-Za-z\d]{8,}$/)
-      .withMessage('Password must be at least 8 characters and include alphabets and numbers'),
+      .isLength({ min: 8 })
+      .withMessage('Password must be at least 8 characters'),
   ], async (req, res) => {
 
 
@@ -157,34 +158,20 @@ const startServer = async () => {
         const { email, password } = req.body;
         // Find a document where email and password match
         const user = await UserInfo.findOne({ email });
-        if (!user) {
+        if (user) {
+          const passwordCompare = bcrypt.compare(password, user.password);
+          if (passwordCompare) {
+            const token = jwt.sign({ email: user.email, name: user.name }, process.env.JWT_SIGNATURE);
 
-          return res.status(401).json({ msg: "User not found" });
-        }
-        const passwordCompare = bcrypt.compare(password, user.password);
-        if (passwordCompare) {
-          const token = jwt.sign({ email: user.email, name: user.name }, process.env.JWT_SIGNATURE);
-          const MaxAge = process.env.cookieMaxAge * 24 * 60 * 60 * 1000;
-          console.log(token)
-          //setcookie
-          res.cookie("token", token, {
-            httpOnly: true,
-            maxAge: MaxAge,
-          });
-
-
-          return res.status(200).json({ msg: "Login successful" });
-
-        } else {
-
+            return res.status(200).json({ msg: "Login successful", token: token, userData: user })
+          }
           return res.status(401).json({ msg: "Incorrect credentials" });
         }
+        return res.status(401).json({ msg: "User not found" });
       } catch (error) {
-
         res.status(500).json({ message: "Error retrieving login", error });
       }
     });
-
 
   app.post('/upload', verifyUser, upload.single('video'), async (req, res) => {
     try {
@@ -265,7 +252,6 @@ const startServer = async () => {
       res.status(500).json({ message: 'Error uploading video' });
     }
   });
-
 
   app.get('/uploadedcontent', async (req, res) => {
     try {
@@ -503,6 +489,58 @@ const startServer = async () => {
 
 
   //not tested 
+  app.post("/getPostsAndSaved", async (req, res) => {
+    try {
+      const { email, reqId } = req.body;
+      const Info = await UserInfo.findOne({ _id: email });
+      const posts = Info.posts;
+      const saved = Info.saved;
+      const followers = Info.followers;
+      const following = Info.following;
+
+      const postsInfo = await Promise.all(
+        posts.map(async (post) => {
+          const video = await Video.findById(post);
+          return video;
+        })
+      );
+
+      const savedInfo = await Promise.all(
+        saved.map(async (save) => {
+          const video = await Video.findById(save);
+          return video;
+        })
+      );
+
+      const followersInfo = await Promise.all(
+        followers.map(async (follower) => {
+          const user = await UserInfo.findById(follower);
+          return {
+            followerId: follower,
+            followerName: user.fancyId,
+            followerPic: user.profilePic,
+            following: user.followers.includes(reqId),
+          };
+        })
+      );
+
+      const followingInfo = await Promise.all(
+        following.map(async (follow) => {
+          const user = await UserInfo.findById(follow);
+          return {
+            followingId: follow,
+            followingName: user.fancyId,
+            followingPic: user.profilePic,
+            following: user.followers.includes(reqId),
+          };
+        })
+      );
+
+      res.status(200).json({ postsInfo, savedInfo, followersInfo, followingInfo });
+    } catch (error) {
+      res.status(500).json({ message: "Error retriving Last chat & info" });
+    }
+  });
 
   app.post("/message", async (req, res) => {
     try {
@@ -604,58 +642,6 @@ const startServer = async () => {
     }
   });
 
-  app.post("/getPostsAndSaved", async (req, res) => {
-    try {
-      const { email, reqId } = req.body;
-      const Info = await UserInfo.findOne({ _id: email });
-      const posts = Info.posts;
-      const saved = Info.saved;
-      const followers = Info.followers;
-      const following = Info.following;
-
-      const postsInfo = await Promise.all(
-        posts.map(async (post) => {
-          const video = await Video.findById(post);
-          return video;
-        })
-      );
-
-      const savedInfo = await Promise.all(
-        saved.map(async (save) => {
-          const video = await Video.findById(save);
-          return video;
-        })
-      );
-
-      const followersInfo = await Promise.all(
-        followers.map(async (follower) => {
-          const user = await UserInfo.findById(follower);
-          return {
-            followerId: follower,
-            followerName: user.fancyId,
-            followerPic: user.profilePic,
-            following: user.followers.includes(reqId),
-          };
-        })
-      );
-
-      const followingInfo = await Promise.all(
-        following.map(async (follow) => {
-          const user = await UserInfo.findById(follow);
-          return {
-            followingId: follow,
-            followingName: user.fancyId,
-            followingPic: user.profilePic,
-            following: user.followers.includes(reqId),
-          };
-        })
-      );
-
-      res.status(200).json({ postsInfo, savedInfo, followersInfo, followingInfo });
-    } catch (error) {
-      res.status(500).json({ message: "Error retriving Last chat & info" });
-    }
-  });
 
   app.post("/getTokens", async (req, res) => {
     try {
@@ -712,16 +698,173 @@ const startServer = async () => {
       res.status(500).json({ message: "Error retreiving Interests" });
     }
   });
-
-
   app.use("/temp", express.static(path.join(__dirname, "temp")));
 
 
 
 
 
+  //not tested yet
+  app.post("/updateName", async (req, res) => {
+    try {
+      const { _id, name } = req.body;
+      await UserInfo.updateOne({ _id }, { name });
+      res.status(200).json({ message: "Name updated successfully" });
+    } catch (error) {
+      res.status(500).json({ message: "Error updating Name" });
+    }
+  });
+
+  app.post("/updateFancyId", async (req, res) => {
+    try {
+      const { _id, fancyId } = req.body;
+      await UserInfo.updateOne({ _id }, { fancyId });
+      res.status(200).json({ message: "FancyId updated successfully" });
+    } catch (error) {
+      res.status(500).json({ message: "Error updating FancyId" });
+    }
+  });
+
+  app.post("/updateEmail", async (req, res) => {
+    try {
+      const { _id, email } = req.body;
+      await UserInfo.updateOne({ _id }, { email });
+      res.status(200).json({ message: "Email updated successfully" });
+    } catch (error) {
+      res.status(500).json({ message: "Error updating Email" });
+    }
+  });
+
+  app.post("/updateSocial", async (req, res) => {
+    try {
+      const { _id, socialId } = req.body;
+      await UserInfo.updateOne({ _id }, { socialId });
+      res.status(200).json({ message: "Email updated successfully" });
+    } catch (error) {
+      res.status(500).json({ message: "Error updating Email" });
+    }
+  });
+
+  app.post("/getAllUsers", async (req, res) => {
+    try {
+      const { _id } = req.body;
+      const users = await UserInfo.find({ _id: { $ne: _id } });
+      const updatedUsers = users.map((user) => ({
+        ...user._doc,
+        following: user.followers.includes(_id),
+      }));
+      res.status(200).json(updatedUsers);
+    } catch (error) {
+      res.status(500).json({ message: "Error getting all users" });
+    }
+  });
+
+  app.post("/getUserProfile", async (req, res) => {
+    try {
+      const { _id, reqId } = req.body;
+      const user = await UserInfo.find({ _id });
+      const updatedUser = {
+        ...user[0]._doc,
+        following: user[0].followers.includes(reqId),
+      };
+      res.status(200).json(updatedUser);
+    } catch (error) {
+      res.status(500).json({ message: "Error getting all users" });
+    }
+  });
+
+  app.post("/follow", async (req, res) => {
+    try {
+      const { _id, reqId, followStatus } = req.body;
+      if (followStatus) {
+        await UserInfo.updateOne({ _id }, { $pull: { followers: reqId } });
+        await UserInfo.updateOne({ _id: reqId }, { $pull: { following: _id } });
+      } else {
+        await UserInfo.updateOne({ _id }, { $push: { followers: reqId } });
+        await UserInfo.updateOne({ _id: reqId }, { $push: { following: _id } });
+      }
+      res.status(200).json({ message: "Person followed/unfollowed successfully" });
+    } catch (error) {
+      res.status(500).json({ message: "Error followed/unfollowed Person" });
+    }
 
 
+  });
+
+
+  // forgotPassword
+  app.post("/verify-email", async (req, res) => {
+    const { email } = req.body;
+    const existingUser = await UserInfo.findOne({ email });
+    if (existingUser) {
+      res.status(200).json({ message: true });
+      return;
+    }
+    res.status(404).json({ message: false });
+  });
+
+  app.post("/change-password", async (req, res) => {
+    try {
+      const { email, password } = req.body;
+      const updatePassword = await UserInfo.updateOne({ email }, { password });
+      if (updatePassword) {
+        res.status(200).json({ message: "Password changed successfully" });
+      } else {
+        res.status(404).json({ message: "Password not changed" });
+      }
+    } catch (error) {
+      res.status(500).json({ message: "Error changing Password" });
+    }
+  });
+
+  // Create a transporter using Gmail SMTP configuration
+  const transporter = nodemailer.createTransport({
+    host: "smtp.gmail.com",
+    port: 465,
+    secure: true,
+    auth: {
+      user: process.env.EMAIL,
+      pass: process.env.APP_PASSWORD,
+    },
+  });
+
+  // Handle POST request to verify email and send OTP
+  app.post("/send-email", (req, res) => {
+    const { email } = req.body;
+
+    // Generate OTP
+    const otp = otpGenerator.generate(4, {
+      digits: true,
+      alphabets: false,
+      upperCase: false,
+      specialChars: false,
+    });
+
+    // Compose the email message
+    const mailOptions = {
+      from: `NetTeam Support <${process.env.EMAIL}>`,
+      to: email,
+      subject: "Email Verification",
+      text: `Your OTP is: ${otp}`,
+    };
+
+    // Send the email
+    transporter.sendMail(mailOptions, (error, info) => {
+      if (error) {
+        console.log("Error:", error);
+        res
+          .status(500)
+          .json({ error: "An error occurred while sending the email" });
+      } else {
+        console.log("Email sent:", info.response);
+        res.status(200).json(otp);
+      }
+    });
+  });
+  // forgot password
+
+
+  //messages-start
 
   function matchSockets(socket) {
     if (availableUsers.size < 2) {
@@ -870,76 +1013,8 @@ const startServer = async () => {
     });
   });
 
-  // forgotPassword
-  app.post("/verify-email", async (req, res) => {
-    const { email } = req.body;
-    const existingUser = await UserInfo.findOne({ email });
-    if (existingUser) {
-      res.status(200).json({ message: true });
-      return;
-    }
-    res.status(404).json({ message: false });
-  });
+  //messages-end
 
-  app.post("/change-password", async (req, res) => {
-    try {
-      const { email, password } = req.body;
-      const updatePassword = await UserInfo.updateOne({ email }, { password });
-      if (updatePassword) {
-        res.status(200).json({ message: "Password changed successfully" });
-      } else {
-        res.status(404).json({ message: "Password not changed" });
-      }
-    } catch (error) {
-      res.status(500).json({ message: "Error changing Password" });
-    }
-  });
-
-  // Create a transporter using Gmail SMTP configuration
-  const transporter = nodemailer.createTransport({
-    host: "smtp.gmail.com",
-    port: 465,
-    secure: true,
-    auth: {
-      user: process.env.EMAIL,
-      pass: process.env.APP_PASSWORD,
-    },
-  });
-
-  // Handle POST request to verify email and send OTP
-  app.post("/send-email", (req, res) => {
-    const { email } = req.body;
-
-    // Generate OTP
-    const otp = otpGenerator.generate(4, {
-      digits: true,
-      alphabets: false,
-      upperCase: false,
-      specialChars: false,
-    });
-
-    // Compose the email message
-    const mailOptions = {
-      from: `NetTeam Support <${process.env.EMAIL}>`,
-      to: email,
-      subject: "Email Verification",
-      text: `Your OTP is: ${otp}`,
-    };
-
-    // Send the email
-    transporter.sendMail(mailOptions, (error, info) => {
-      if (error) {
-        console.log("Error:", error);
-        res
-          .status(500)
-          .json({ error: "An error occurred while sending the email" });
-      } else {
-        console.log("Email sent:", info.response);
-        res.status(200).json(otp);
-      }
-    });
-  });
-  // forgot password
 
   // SUPERCHAT
   // PayPal configuration
@@ -1008,91 +1083,7 @@ const startServer = async () => {
   });
   // Supercht end
 
-  app.post("/updateName", async (req, res) => {
-    try {
-      const { _id, name } = req.body;
-      await UserInfo.updateOne({ _id }, { name });
-      res.status(200).json({ message: "Name updated successfully" });
-    } catch (error) {
-      res.status(500).json({ message: "Error updating Name" });
-    }
-  });
 
-  app.post("/updateFancyId", async (req, res) => {
-    try {
-      const { _id, fancyId } = req.body;
-      await UserInfo.updateOne({ _id }, { fancyId });
-      res.status(200).json({ message: "FancyId updated successfully" });
-    } catch (error) {
-      res.status(500).json({ message: "Error updating FancyId" });
-    }
-  });
-
-  app.post("/updateEmail", async (req, res) => {
-    try {
-      const { _id, email } = req.body;
-      await UserInfo.updateOne({ _id }, { email });
-      res.status(200).json({ message: "Email updated successfully" });
-    } catch (error) {
-      res.status(500).json({ message: "Error updating Email" });
-    }
-  });
-
-  app.post("/updateSocial", async (req, res) => {
-    try {
-      const { _id, socialId } = req.body;
-      await UserInfo.updateOne({ _id }, { socialId });
-      res.status(200).json({ message: "Email updated successfully" });
-    } catch (error) {
-      res.status(500).json({ message: "Error updating Email" });
-    }
-  });
-
-  app.post("/getAllUsers", async (req, res) => {
-    try {
-      const { _id } = req.body;
-      const users = await UserInfo.find({ _id: { $ne: _id } });
-      const updatedUsers = users.map((user) => ({
-        ...user._doc,
-        following: user.followers.includes(_id),
-      }));
-      res.status(200).json(updatedUsers);
-    } catch (error) {
-      res.status(500).json({ message: "Error getting all users" });
-    }
-  });
-
-  app.post("/getUserProfile", async (req, res) => {
-    try {
-      const { _id, reqId } = req.body;
-      const user = await UserInfo.find({ _id });
-      const updatedUser = {
-        ...user[0]._doc,
-        following: user[0].followers.includes(reqId),
-      };
-      res.status(200).json(updatedUser);
-    } catch (error) {
-      res.status(500).json({ message: "Error getting all users" });
-    }
-  });
-
-  app.post("/follow", async (req, res) => {
-    try {
-      const { _id, reqId, followStatus } = req.body;
-      if (followStatus) {
-        await UserInfo.updateOne({ _id }, { $pull: { followers: reqId } });
-        await UserInfo.updateOne({ _id: reqId }, { $pull: { following: _id } });
-      } else {
-        await UserInfo.updateOne({ _id }, { $push: { followers: reqId } });
-        await UserInfo.updateOne({ _id: reqId }, { $push: { following: _id } });
-      }
-      res.status(200).json({ message: "Person followed/unfollowed successfully" });
-    } catch (error) {
-      res.status(500).json({ message: "Error followed/unfollowed Person" });
-    }
-
-
-  });
 
   app.listen(port, () => {
     console.log(`this server is running on ${port}`);
