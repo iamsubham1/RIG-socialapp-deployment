@@ -56,9 +56,9 @@ cloudinary.config({
 });
 
 
-const ffmpegPath = process.env.FFMPEG_PATH || 'C:/ffmpegpath';
 
-ffmpeg.setFfmpegPath(ffmpegPath);
+
+
 
 const startServer = async () => {
   // Helper functions to get additional information
