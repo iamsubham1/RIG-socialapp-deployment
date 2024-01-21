@@ -161,7 +161,10 @@ const startServer = async () => {
         if (user) {
           const passwordCompare = bcrypt.compare(password, user.password);
           if (passwordCompare) {
-            const token = jwt.sign({ email: user.email, name: user.name }, process.env.JWT_SIGNATURE);
+
+            const{ password, ...userDataWithoutPassword }= user.toObject();
+            const token = jwt.sign(userDataWithoutPassword, process.env.JWT_SIGNATURE);
+            
 
             return res.status(200).json({ msg: "Login successful", token: token, userData: user })
           }
